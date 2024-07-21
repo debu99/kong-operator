@@ -1,19 +1,3 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package controller
 
 import (
@@ -22,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
 
+  apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,27 +28,21 @@ type KongServiceReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-//+kubebuilder:rbac:groups=kong.example.com,resources=kongservices,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=kong.example.com,resources=kongservices/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=kong.example.com,resources=kongservices/finalizers,verbs=update
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KongService object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Fetch the KongService instance
 	var kongService kongv1.KongService
-	if err := r.Get(ctx, req.NamespacedName, &kongService); err != nil {
-		logger.Error(err, "Unable to fetch KongService")
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	err := r.Get(ctx, req.NamespacedName, &kongService)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// The KongService resource has been deleted
+			logger.Info("KongService resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
+		logger.Error(err, "Failed to get KongService")
+		return ctrl.Result{}, err
 	}
 	// Log the reconciliation
 	logger.Info("Reconciling KongService", "name", kongService.Name)
@@ -91,10 +69,9 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 		kongService.Status.ServiceID = serviceID
-		logger.Info("Successfully created KongService", "name", kongService.Name, "serviceID", serviceID)
+		logger.Info("Successfully created KongService", "name", kongService.Spec.Name, "serviceID", serviceID)
 	} else {
-		// Service exists
-		logger.Info("Kong Service already exists", "name", kongService.Name, "serviceID", kongService.Status.ServiceID)
+		logger.Info("Kong Service already exists", "name", kongService.Spec.Name, "serviceID", kongService.Status.ServiceID)
 	}
 
 	// Initialize RouteIDs map if it's nil
@@ -102,37 +79,20 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		kongService.Status.RouteIDs = make(map[string]string)
 	}
 
-	// Create or update routes
+	// Create routes if they don't exist
 	for _, route := range kongService.Spec.Routes {
-		routeName := generateRouteName(kongService.Name, kongService.Spec.Name, route.Path)
-
-		existingRouteID := kongService.Status.RouteIDs[routeName]
-		routeID, err := r.createOrUpdateRoute(ctx, kongService.Name, kongService.Spec.Name, kongService.Status.ServiceID, route, existingRouteID)
-		if err != nil {
-			logger.Error(err, "Failed to create/update Kong route", "name", routeName)
-			return ctrl.Result{}, err
-		}
-
-		if existingRouteID == "" {
-			logger.Info("Successfully created Kong Route", "name", routeName, "routeID", routeID)
-		} else if routeID != existingRouteID {
-			logger.Info("Successfully updated Kong Route", "name", routeName, "routeID", routeID)
-		} else {
-			logger.Info("Kong Route is up to date", "name", routeName, "routeID", routeID)
-		}
-
-		kongService.Status.RouteIDs[routeName] = routeID
-	}
-
-	// Check for routes to delete
-	for routeName, routeID := range kongService.Status.RouteIDs {
-		if !routeExistsInSpec(routeName, kongService.Spec.Routes) {
-			if err := r.deleteRoute(ctx, routeID); err != nil {
-				logger.Error(err, "Failed to delete Kong route", "name", routeName, "routeID", routeID)
+		routeName := generateRouteName(kongService.Spec.Name, route.Path)
+		if _, exists := kongService.Status.RouteIDs[routeName]; !exists {
+			// Route doesn't exist, create it
+			routeID, err := r.createRoute(ctx, kongService.Spec.Name, kongService.Status.ServiceID, route)
+			if err != nil {
+				logger.Error(err, "Failed to create Kong route", "name", routeName)
 				return ctrl.Result{}, err
 			}
-			delete(kongService.Status.RouteIDs, routeName)
-			logger.Info("Successfully deleted Kong Route", "name", routeName, "routeID", routeID)
+			kongService.Status.RouteIDs[routeName] = routeID
+			logger.Info("Successfully created Kong Route", "name", routeName, "routeID", routeID)
+		} else {
+			logger.Info("Kong Route already exists", "name", routeName, "routeID", kongService.Status.RouteIDs[routeName])
 		}
 	}
 
@@ -145,32 +105,16 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-func generateRouteName(kongServiceName, serviceName, path string) string {
-	cleanPath := strings.Trim(path, "/")
-	routeName := fmt.Sprintf("%s-%s-%s", kongServiceName, serviceName, cleanPath)
-	return strings.ReplaceAll(routeName, "/", "-")
-}
-
-func routeExistsInSpec(routeName string, specRoutes []kongv1.Route) bool {
-	for _, route := range specRoutes {
-		if generateRouteName("", "", route.Path) == routeName {
-			return true
-		}
-	}
-	return false
-}
-
-
 func (r *KongServiceReconciler) reconcileDelete(ctx context.Context, kongService *kongv1.KongService) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Delete all routes
-	for path, routeID := range kongService.Status.RouteIDs {
+	for routeName, routeID := range kongService.Status.RouteIDs {
 		if err := r.deleteRoute(ctx, routeID); err != nil {
-			logger.Error(err, "Failed to delete Kong route", "path", path, "routeID", routeID)
+			logger.Error(err, "Failed to delete Kong route", "name", routeName, "routeID", routeID)
 			return ctrl.Result{}, err
 		}
-		logger.Info("Successfully deleted Kong Route", "path", path, "routeID", routeID)
+		logger.Info("Successfully deleted Kong Route", "name", routeName, "routeID", routeID)
 	}
 
 	// Delete the Kong service
@@ -219,7 +163,7 @@ func (r *KongServiceReconciler) createService(ctx context.Context, name, url str
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -242,7 +186,7 @@ func (r *KongServiceReconciler) createService(ctx context.Context, name, url str
 	return serviceID, nil
 }
 
-func (r *KongServiceReconciler) createOrUpdateRoute(ctx context.Context, kongServiceName, serviceName, serviceID string, route kongv1.Route, existingRouteID string) (string, error) {
+func (r *KongServiceReconciler) createRoute(ctx context.Context, serviceName, serviceID string, route kongv1.Route) (string, error) {
 	logger := log.FromContext(ctx)
 
 	cpUUID := os.Getenv("CP_UUID")
@@ -252,15 +196,15 @@ func (r *KongServiceReconciler) createOrUpdateRoute(ctx context.Context, kongSer
 		return "", fmt.Errorf("CP_UUID or KONNECT_TOKEN environment variables are not set")
 	}
 
-	// Create a unique route name
-	routeName := generateRouteName(kongServiceName, serviceName, route.Path)
+	routeName := generateRouteName(serviceName, route.Path)
 
-	// Prepare route data
+	apiURL := fmt.Sprintf("https://eu.api.konghq.com/v2/control-planes/%s/core-entities/routes", cpUUID)
+
 	routeData := map[string]interface{}{
 		"name":    routeName,
 		"service": map[string]string{"id": serviceID},
 		"paths":   []string{route.Path},
-		"tags":    append(route.Tags, kongServiceName, serviceName, "k8s-operator"),
+		"tags":    append(route.Tags, serviceName, "k8s-operator"),
 	}
 
 	if len(route.Methods) > 0 {
@@ -281,24 +225,12 @@ func (r *KongServiceReconciler) createOrUpdateRoute(ctx context.Context, kongSer
 		routeData["protocols"] = []string{"http", "https"}
 	}
 
-	var apiURL string
-	var method string
-	if existingRouteID == "" {
-		// Create new route
-		apiURL = fmt.Sprintf("https://eu.api.konghq.com/v2/control-planes/%s/core-entities/routes", cpUUID)
-		method = "POST"
-	} else {
-		// Update existing route
-		apiURL = fmt.Sprintf("https://eu.api.konghq.com/v2/control-planes/%s/core-entities/routes/%s", cpUUID, existingRouteID)
-		method = "PATCH"
-	}
-
 	payload, err := json.Marshal(routeData)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal route data: %w", err)
 	}
 
-	req, err := http.NewRequest(method, apiURL, bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(payload))
 	if err != nil {
 		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -318,9 +250,9 @@ func (r *KongServiceReconciler) createOrUpdateRoute(ctx context.Context, kongSer
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		logger.Error(fmt.Errorf("API error"), "Failed to create/update route", "statusCode", resp.StatusCode, "response", string(body))
-		return "", fmt.Errorf("failed to create/update route, status code: %d, response: %s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusCreated {
+		logger.Error(fmt.Errorf("API error"), "Failed to create route", "statusCode", resp.StatusCode, "response", string(body))
+		return "", fmt.Errorf("failed to create route, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
@@ -363,7 +295,7 @@ func (r *KongServiceReconciler) deleteService(ctx context.Context, serviceID str
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		logger.Error(fmt.Errorf("API error"), "Failed to delete service", "statusCode", resp.StatusCode, "response", string(body))
 		return fmt.Errorf("failed to delete service, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
@@ -398,12 +330,18 @@ func (r *KongServiceReconciler) deleteRoute(ctx context.Context, routeID string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		logger.Error(fmt.Errorf("API error"), "Failed to delete route", "statusCode", resp.StatusCode, "response", string(body))
 		return fmt.Errorf("failed to delete route, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
+}
+
+func generateRouteName(serviceName, path string) string {
+	cleanPath := strings.Trim(path, "/")
+	routeName := fmt.Sprintf("%s-%s", serviceName, cleanPath)
+	return strings.ReplaceAll(routeName, "/", "-")
 }
 
 // SetupWithManager sets up the controller with the Manager.
