@@ -58,15 +58,14 @@ type KongServiceReconciler struct {
 func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Log the reconciliation
-	logger.Info("Reconciling KongService", "name", kongService.Name)
-
 	// Fetch the KongService instance
 	var kongService kongv1.KongService
 	if err := r.Get(ctx, req.NamespacedName, &kongService); err != nil {
 		logger.Error(err, "Unable to fetch KongService")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	// Log the reconciliation
+	logger.Info("Reconciling KongService", "name", kongService.Name)
 
 	// Check if the KongService instance is marked to be deleted
 	if !kongService.ObjectMeta.DeletionTimestamp.IsZero() {
@@ -81,23 +80,19 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// Check if the service already exists
+	// Check if the service exists in the status
 	if kongService.Status.ServiceID == "" {
-		// Create the service
+		// Service doesn't exist, create it
 		serviceID, err := r.createService(ctx, kongService.Spec.Name, kongService.Spec.URL)
 		if err != nil {
 			logger.Error(err, "Failed to create Kong service")
 			return ctrl.Result{}, err
 		}
-
-		// Update the status
 		kongService.Status.ServiceID = serviceID
-		if err := r.Status().Update(ctx, &kongService); err != nil {
-			logger.Error(err, "Failed to update KongService status")
-			return ctrl.Result{}, err
-		}
-
 		logger.Info("Successfully created KongService", "name", kongService.Name, "serviceID", serviceID)
+	} else {
+		// Service exists
+		logger.Info("Kong Service already exists", "name", kongService.Name, "serviceID", kongService.Status.ServiceID)
 	}
 
 	// Initialize RouteIDs map if it's nil
@@ -107,7 +102,10 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Create or update routes
 	for _, route := range kongService.Spec.Routes {
-		if routeID, exists := kongService.Status.RouteIDs[route.Path]; !exists {
+		if existingRouteID, exists := kongService.Status.RouteIDs[route.Path]; exists {
+			// Route exists
+			logger.Info("Kong Route already exists", "path", route.Path, "routeID", existingRouteID)
+		} else {
 			// Create new route
 			newRouteID, err := r.createRoute(ctx, kongService.Status.ServiceID, route.Path)
 			if err != nil {
@@ -116,10 +114,6 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			kongService.Status.RouteIDs[route.Path] = newRouteID
 			logger.Info("Successfully created Kong Route", "path", route.Path, "routeID", newRouteID)
-		} else {
-			// Route exists, you might want to update it if necessary
-			// For now, we'll just log that it exists
-			logger.Info("Kong Route already exists", "path", route.Path, "routeID", routeID)
 		}
 	}
 
@@ -151,6 +145,7 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	return ctrl.Result{}, nil
 }
+
 
 func (r *KongServiceReconciler) reconcileDelete(ctx context.Context, kongService *kongv1.KongService) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
