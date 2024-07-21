@@ -1,0 +1,31 @@
+# permissions for end users to edit kongservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: kongservice-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: kong-operator
+    app.kubernetes.io/part-of: kong-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kongservice-editor-role
+rules:
+- apiGroups:
+  - kong.example.com
+  resources:
+  - kongservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - kong.example.com
+  resources:
+  - kongservices/status
+  verbs:
+  - get

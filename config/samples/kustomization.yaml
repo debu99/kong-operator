@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- kong_v1_kongservice.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

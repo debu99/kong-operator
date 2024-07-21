@@ -1,0 +1,27 @@
+# permissions for end users to view kongservices.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: kongservice-viewer-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: kong-operator
+    app.kubernetes.io/part-of: kong-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kongservice-viewer-role
+rules:
+- apiGroups:
+  - kong.example.com
+  resources:
+  - kongservices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - kong.example.com
+  resources:
+  - kongservices/status
+  verbs:
+  - get
