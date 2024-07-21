@@ -23,6 +23,10 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type Route struct {
+	Path string `json:"path"`
+}
+
 // KongServiceSpec defines the desired state of KongService
 type KongServiceSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
@@ -31,6 +35,7 @@ type KongServiceSpec struct {
 	// Foo is an example field of KongService. Edit kongservice_types.go to remove/update
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	Routes []Route  `json:"routes"`
 }
 
 // KongServiceStatus defines the observed state of KongService
@@ -38,6 +43,7 @@ type KongServiceStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	ServiceID string `json:"serviceId,omitempty"`
+	RouteIDs  map[string]string `json:"routeIds,omitempty"`
 }
 
 //+kubebuilder:object:root=true
