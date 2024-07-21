@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"strings"
@@ -65,7 +66,7 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	logger.Info("Reconciling KongService", "name", kongService.Name)
 
 	// Create the service
-	serviceID, err := r.createService(kongService.Spec.Name, kongService.Spec.URL)
+	serviceID, err := r.createService(ctx, kongService.Spec.Name, kongService.Spec.URL)
 	if err != nil {
 		logger.Error(err, "Failed to create Kong service")
 		return ctrl.Result{}, err
@@ -83,7 +84,9 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-func (r *KongServiceReconciler) createService(name, url string) (string, error) {
+func (r *KongServiceReconciler) createService(ctx context.Context, name, url string) (string, error) {
+	logger := log.FromContext(ctx)
+
 	cpUUID := os.Getenv("CP_UUID")
 	konnectToken := os.Getenv("KONNECT_TOKEN")
 
@@ -96,7 +99,7 @@ func (r *KongServiceReconciler) createService(name, url string) (string, error) 
 
 	req, err := http.NewRequest("POST", apiURL, payload)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 
 	req.Header.Add("Authorization", "Bearer "+konnectToken)
@@ -105,22 +108,32 @@ func (r *KongServiceReconciler) createService(name, url string) (string, error) 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to send HTTP request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("failed to create service, status code: %d", resp.StatusCode)
+		logger.Error(fmt.Errorf("API error"), "Failed to create service", "statusCode", resp.StatusCode, "response", string(body))
+		return "", fmt.Errorf("failed to create service, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("failed to parse JSON response: %w", err)
 	}
 
-	return result["id"].(string), nil
-}
+	serviceID, ok := result["id"].(string)
+	if !ok {
+		return "", fmt.Errorf("service ID not found in response")
+	}
 
+	return serviceID, nil
+}
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KongServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
