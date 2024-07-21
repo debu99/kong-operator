@@ -1,48 +1,29 @@
-/*
-Copyright 2024.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-type Route struct {
-	Path string `json:"path"`
-}
-
 // KongServiceSpec defines the desired state of KongService
 type KongServiceSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// Foo is an example field of KongService. Edit kongservice_types.go to remove/update
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	Routes []Route  `json:"routes"`
+	Name   string  `json:"name"`
+	URL    string  `json:"url"`
+	Routes []Route `json:"routes"`
 }
 
+// Route defines a Kong route
+type Route struct {
+	Path        string   `json:"path"`
+	Methods     []string `json:"methods,omitempty"`
+	Hosts       []string `json:"hosts,omitempty"`
+	StripPath   *bool    `json:"stripPath,omitempty"`
+	PreserveHost *bool   `json:"preserveHost,omitempty"`
+	Protocols   []string `json:"protocols,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+}
 // KongServiceStatus defines the observed state of KongService
 type KongServiceStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	ServiceID string `json:"serviceId,omitempty"`
+	ServiceID string            `json:"serviceId,omitempty"`
 	RouteIDs  map[string]string `json:"routeIds,omitempty"`
 }
 
