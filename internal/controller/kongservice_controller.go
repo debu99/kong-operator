@@ -65,6 +65,12 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Log the reconciliation
 	logger.Info("Reconciling KongService", "name", kongService.Name)
 
+	// Check if the service already exists
+	if kongService.Status.ServiceID != "" {
+		logger.Info("Service already exists, skipping creation", "serviceID", kongService.Status.ServiceID)
+		return ctrl.Result{}, nil
+	}
+
 	// Create the service
 	serviceID, err := r.createService(ctx, kongService.Spec.Name, kongService.Spec.URL)
 	if err != nil {
@@ -79,7 +85,7 @@ func (r *KongServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	logger.Info("Successfully reconciled KongService", "name", kongService.Name, "serviceID", serviceID)
+	logger.Info("Successfully created KongService", "name", kongService.Name, "serviceID", serviceID)
 
 	return ctrl.Result{}, nil
 }
